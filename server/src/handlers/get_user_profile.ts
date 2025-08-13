@@ -1,16 +1,31 @@
+import { db } from '../db';
+import { usersTable } from '../db/schema';
 import { type PublicUser } from '../schema';
+import { eq } from 'drizzle-orm';
 
-export async function getUserProfile(userId: number): Promise<PublicUser> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is:
-    // 1. Fetch the current user's profile data from the database
-    // 2. Return the public user information (excluding password hash)
-    // 3. This handler is useful for refreshing user data and checking current coin balance
+export const getUserProfile = async (userId: number): Promise<PublicUser> => {
+  try {
+    // Query user from database by user_id
+    const results = await db.select()
+      .from(usersTable)
+      .where(eq(usersTable.user_id, userId))
+      .execute();
+
+    if (results.length === 0) {
+      throw new Error('User not found');
+    }
+
+    const user = results[0];
     
-    return Promise.resolve({
-        user_id: userId,
-        username: 'placeholder-username',
-        coin: 100, // Placeholder coin balance
-        created_at: new Date() // Placeholder date
-    } as PublicUser);
-}
+    // Return public user data with numeric conversion for coin field
+    return {
+      user_id: user.user_id,
+      username: user.username,
+      coin: parseFloat(user.coin), // Convert numeric to number
+      created_at: user.created_at
+    };
+  } catch (error) {
+    console.error('Get user profile failed:', error);
+    throw error;
+  }
+};

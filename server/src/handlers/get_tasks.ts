@@ -1,12 +1,34 @@
+import { db } from '../db';
+import { tasksTable, usersTable } from '../db/schema';
 import { type TaskWithCreator } from '../schema';
+import { eq, desc } from 'drizzle-orm';
 
 export async function getTasks(): Promise<TaskWithCreator[]> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is:
-    // 1. Fetch all tasks with 'open' status from the database
-    // 2. Join with users table to include creator username information
-    // 3. Return the list of open tasks with creator details
-    // 4. Order by creation date (newest first) for better user experience
-    
-    return Promise.resolve([]);
+  try {
+    // Join tasks with users to get creator information
+    // Only fetch tasks with 'open' status
+    const results = await db.select({
+      task_id: tasksTable.task_id,
+      creator_user_id: tasksTable.creator_user_id,
+      creator_username: usersTable.username,
+      link: tasksTable.link,
+      coin_reward: tasksTable.coin_reward,
+      status: tasksTable.status,
+      created_at: tasksTable.created_at
+    })
+    .from(tasksTable)
+    .innerJoin(usersTable, eq(tasksTable.creator_user_id, usersTable.user_id))
+    .where(eq(tasksTable.status, 'open'))
+    .orderBy(desc(tasksTable.created_at))
+    .execute();
+
+    // Convert numeric coin_reward field to number
+    return results.map(result => ({
+      ...result,
+      coin_reward: parseFloat(result.coin_reward) // Convert string to number
+    }));
+  } catch (error) {
+    console.error('Failed to fetch tasks:', error);
+    throw error;
+  }
 }
