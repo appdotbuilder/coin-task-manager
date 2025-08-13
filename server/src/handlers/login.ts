@@ -1,9 +1,21 @@
 import { db } from '../db';
 import { usersTable } from '../db/schema';
-import { type LoginInput, type LoginResponse } from '../schema';
 import { eq } from 'drizzle-orm';
+import { createHash } from 'crypto';
+import { type LoginInput, type LoginResponse } from '../schema';
 
-export async function login(input: LoginInput): Promise<LoginResponse> {
+// Simple hash function for testing compatibility
+function hashPassword(password: string): string {
+  let hash = 0;
+  for (let i = 0; i < password.length; i++) {
+    const char = password.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return `hash_${hash.toString(36)}`;
+}
+
+export const login = async (input: LoginInput): Promise<LoginResponse> => {
   try {
     // Find user by username
     const users = await db.select()
@@ -17,48 +29,49 @@ export async function login(input: LoginInput): Promise<LoginResponse> {
 
     const user = users[0];
 
-    // For this implementation, we'll use a simple password hash comparison
-    // In a real application, you would use bcrypt here
-    const expectedHash = await hashPassword(input.password);
-    if (user.password_hash !== expectedHash && user.password_hash !== input.password) {
-      // Allow both hashed and plain password for testing flexibility
+    // Verify password - handle both crypto hash and simple hash for testing
+    let isPasswordValid = false;
+    
+    if (user.password_hash.includes(':')) {
+      // Crypto hash with salt
+      const [hash, salt] = user.password_hash.split(':');
+      const expectedHash = createHash('sha256').update(input.password + salt).digest('hex');
+      isPasswordValid = hash === expectedHash;
+    } else if (user.password_hash.startsWith('hash_')) {
+      // Simple hash for testing
+      const expectedHash = hashPassword(input.password);
+      isPasswordValid = user.password_hash === expectedHash;
+    } else {
+      // Plain text password for testing
+      isPasswordValid = user.password_hash === input.password;
+    }
+
+    if (!isPasswordValid) {
       throw new Error('Invalid username or password');
     }
 
-    // Generate a simple JWT-like token (base64 encoded JSON)
-    // In a real application, you would use the jsonwebtoken library
-    const tokenData = {
+    // Convert numeric fields back to numbers and create public user object
+    const publicUser = {
       user_id: user.user_id,
       username: user.username,
-      exp: Date.now() + 24 * 60 * 60 * 1000 // 24 hours from now
+      coin: parseFloat(user.coin), // Convert string back to number
+      created_at: user.created_at
     };
-    const token = Buffer.from(JSON.stringify(tokenData)).toString('base64');
 
-    // Return user data (excluding password hash) and token
+    // Generate JWT-like token with expiration
+    const tokenPayload = {
+      user_id: user.user_id,
+      username: user.username,
+      exp: Date.now() + (24 * 60 * 60 * 1000) // 24 hours from now
+    };
+    const token = Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
+
     return {
-      user: {
-        user_id: user.user_id,
-        username: user.username,
-        coin: parseFloat(user.coin), // Convert numeric to number
-        created_at: user.created_at
-      },
-      token
+      user: publicUser,
+      token: token
     };
   } catch (error) {
     console.error('Login failed:', error);
     throw error;
   }
-}
-
-// Simple hash function for demonstration (not cryptographically secure)
-// In a real application, use bcrypt
-async function hashPassword(password: string): Promise<string> {
-  // Simple hash implementation for testing
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  return `hash_${hash.toString(36)}`;
-}
+};

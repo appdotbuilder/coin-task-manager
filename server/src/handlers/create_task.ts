@@ -1,13 +1,13 @@
 import { db } from '../db';
 import { usersTable, tasksTable } from '../db/schema';
-import { type CreateTaskInput, type Task } from '../schema';
 import { eq } from 'drizzle-orm';
+import { type CreateTaskInput, type Task } from '../schema';
 
-export async function createTask(input: CreateTaskInput, userId: number): Promise<Task> {
+export const createTask = async (input: CreateTaskInput, userId: number): Promise<Task> => {
   try {
-    // Use transaction to ensure atomicity
-    const result = await db.transaction(async (tx) => {
-      // 1. Check if user exists and has sufficient coin balance
+    // Start a transaction to ensure atomic operation
+    return await db.transaction(async (tx) => {
+      // Check user's current balance
       const users = await tx.select()
         .from(usersTable)
         .where(eq(usersTable.user_id, userId))
@@ -18,20 +18,20 @@ export async function createTask(input: CreateTaskInput, userId: number): Promis
       }
 
       const user = users[0];
-      const userBalance = parseFloat(user.coin);
-      
-      if (userBalance < input.coin_reward) {
+      const currentBalance = parseFloat(user.coin);
+
+      if (currentBalance < input.coin_reward) {
         throw new Error('Insufficient coin balance');
       }
 
-      // 2. Deduct the coin reward amount from user's balance
-      const newBalance = userBalance - input.coin_reward;
+      // Deduct coins from user's balance
+      const newBalance = currentBalance - input.coin_reward;
       await tx.update(usersTable)
-        .set({ coin: newBalance.toString() })
+        .set({ coin: newBalance.toString() }) // Convert number to string for numeric column
         .where(eq(usersTable.user_id, userId))
         .execute();
 
-      // 3. Create new task record with 'open' status
+      // Create the task
       const taskResult = await tx.insert(tasksTable)
         .values({
           creator_user_id: userId,
@@ -42,16 +42,20 @@ export async function createTask(input: CreateTaskInput, userId: number): Promis
         .returning()
         .execute();
 
-      return taskResult[0];
-    });
+      const task = taskResult[0];
 
-    // 4. Return the created task data with numeric conversions
-    return {
-      ...result,
-      coin_reward: parseFloat(result.coin_reward) // Convert string back to number
-    };
+      // Convert numeric fields back to numbers before returning
+      return {
+        task_id: task.task_id,
+        creator_user_id: task.creator_user_id,
+        link: task.link,
+        coin_reward: parseFloat(task.coin_reward), // Convert string back to number
+        status: task.status,
+        created_at: task.created_at
+      };
+    });
   } catch (error) {
     console.error('Task creation failed:', error);
     throw error;
   }
-}
+};

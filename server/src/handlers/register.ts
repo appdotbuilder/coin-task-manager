@@ -1,45 +1,40 @@
 import { db } from '../db';
 import { usersTable } from '../db/schema';
-import { type RegisterInput, type PublicUser } from '../schema';
-import { eq } from 'drizzle-orm';
 import { createHash, randomBytes } from 'crypto';
+import { type RegisterInput, type PublicUser } from '../schema';
 
-export async function register(input: RegisterInput): Promise<PublicUser> {
+export const register = async (input: RegisterInput): Promise<PublicUser> => {
   try {
-    // 1. Check if username already exists
-    const existingUsers = await db.select()
-      .from(usersTable)
-      .where(eq(usersTable.username, input.username))
-      .execute();
-
-    if (existingUsers.length > 0) {
-      throw new Error('Username already exists');
-    }
-
-    // 2. Hash the password using crypto module
+    // Hash password with salt using crypto
     const salt = randomBytes(16).toString('hex');
-    const passwordHash = createHash('sha256').update(input.password + salt).digest('hex') + ':' + salt;
-
-    // 3. Create new user record with initial coin balance
+    const hash = createHash('sha256').update(input.password + salt).digest('hex');
+    const password_hash = `${hash}:${salt}`;
+    
+    // Insert user record with default coin balance
     const result = await db.insert(usersTable)
       .values({
         username: input.username,
-        password_hash: passwordHash,
-        coin: '100.00' // Convert number to string for numeric column
+        password_hash: password_hash,
+        coin: '100.00' // Default starting balance as string for numeric column
       })
       .returning()
       .execute();
 
-    // 4. Return public user data (excluding password hash)
-    const newUser = result[0];
+    const user = result[0];
+    
+    // Return public user object directly
     return {
-      user_id: newUser.user_id,
-      username: newUser.username,
-      coin: parseFloat(newUser.coin), // Convert string back to number
-      created_at: newUser.created_at
+      user_id: user.user_id,
+      username: user.username,
+      coin: parseFloat(user.coin), // Convert string back to number
+      created_at: user.created_at
     };
-  } catch (error) {
-    console.error('User registration failed:', error);
-    throw error;
+  } catch (error: any) {
+    // Handle unique constraint violation (duplicate username)
+    if (error.code === '23505' && error.constraint === 'users_username_unique') {
+      throw new Error('Username already exists');
+    }
+    console.error('Registration failed:', error);
+    throw new Error('Registration failed');
   }
-}
+};

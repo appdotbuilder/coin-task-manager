@@ -1,64 +1,60 @@
 import { db } from '../db';
 import { tasksTable, usersTable, taskLogTable } from '../db/schema';
+import { eq, and } from 'drizzle-orm';
 import { type CompleteTaskInput, type Task } from '../schema';
-import { eq, sql } from 'drizzle-orm';
 
-export async function completeTask(input: CompleteTaskInput, userId: number): Promise<Task> {
+export const completeTask = async (input: CompleteTaskInput, userId: number): Promise<Task> => {
   try {
+    // Start a transaction to ensure atomic operation
     return await db.transaction(async (tx) => {
-      // 1. Verify that the task exists and has 'open' status
-      const existingTasks = await tx.select()
+      // Get the task details and verify it's open
+      const tasks = await tx.select()
         .from(tasksTable)
-        .where(eq(tasksTable.task_id, input.task_id))
+        .where(and(
+          eq(tasksTable.task_id, input.task_id),
+          eq(tasksTable.status, 'open')
+        ))
         .execute();
 
-      if (existingTasks.length === 0) {
-        throw new Error('Task not found');
+      if (tasks.length === 0) {
+        throw new Error('Task not found or already completed');
       }
 
-      const task = existingTasks[0];
+      const task = tasks[0];
 
-      if (task.status !== 'open') {
-        throw new Error('Task is already completed or not available');
-      }
-
-      // 2. Verify that the user completing the task is not the creator
+      // Prevent user from completing their own task
       if (task.creator_user_id === userId) {
-        throw new Error('Cannot complete your own task');
+        throw new Error('You cannot complete your own task');
       }
 
-      // 3. Verify that the executor user exists
-      const executorUsers = await tx.select()
+      // Get executor's current balance
+      const users = await tx.select()
         .from(usersTable)
         .where(eq(usersTable.user_id, userId))
         .execute();
 
-      if (executorUsers.length === 0) {
+      if (users.length === 0) {
         throw new Error('Executor user not found');
       }
 
-      const executorUser = executorUsers[0];
+      const user = users[0];
+      const currentBalance = parseFloat(user.coin);
+      const taskReward = parseFloat(task.coin_reward);
 
-      // 4. Update the task status to 'completed'
-      const updatedTasks = await tx.update(tasksTable)
-        .set({ status: 'completed' })
-        .where(eq(tasksTable.task_id, input.task_id))
-        .returning()
-        .execute();
-
-      const updatedTask = updatedTasks[0];
-
-      // 5. Add the coin reward to the executor's balance
-      const currentCoin = parseFloat(executorUser.coin);
-      const rewardAmount = parseFloat(updatedTask.coin_reward);
-      const newCoinBalance = currentCoin + rewardAmount;
-
+      // Award coins to the executor
+      const newBalance = currentBalance + taskReward;
       await tx.update(usersTable)
-        .set({ coin: newCoinBalance.toString() })
+        .set({ coin: newBalance.toString() }) // Convert number to string for numeric column
         .where(eq(usersTable.user_id, userId))
         .execute();
 
-      // 6. Create a task log entry recording the completion
+      // Mark task as completed
+      await tx.update(tasksTable)
+        .set({ status: 'completed' })
+        .where(eq(tasksTable.task_id, input.task_id))
+        .execute();
+
+      // Log the completion
       await tx.insert(taskLogTable)
         .values({
           task_id: input.task_id,
@@ -66,14 +62,18 @@ export async function completeTask(input: CompleteTaskInput, userId: number): Pr
         })
         .execute();
 
-      // 7. Return the updated task data with proper numeric conversion
+      // Return the completed task with updated status
       return {
-        ...updatedTask,
-        coin_reward: parseFloat(updatedTask.coin_reward)
+        task_id: task.task_id,
+        creator_user_id: task.creator_user_id,
+        link: task.link,
+        coin_reward: parseFloat(task.coin_reward), // Convert string back to number
+        status: 'completed' as const,
+        created_at: task.created_at
       };
     });
   } catch (error) {
     console.error('Task completion failed:', error);
     throw error;
   }
-}
+};

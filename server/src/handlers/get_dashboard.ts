@@ -1,11 +1,11 @@
 import { db } from '../db';
-import { usersTable, tasksTable, taskLogTable } from '../db/schema';
-import { type DashboardData } from '../schema';
-import { eq, ne, count } from 'drizzle-orm';
+import { tasksTable, usersTable, taskLogTable } from '../db/schema';
+import { eq, count } from 'drizzle-orm';
+import { type DashboardData, type TaskWithCreator } from '../schema';
 
-export async function getDashboard(userId: number): Promise<DashboardData> {
+export const getDashboard = async (userId: number): Promise<DashboardData> => {
   try {
-    // 1. Fetch the authenticated user's current data
+    // Get user profile
     const users = await db.select()
       .from(usersTable)
       .where(eq(usersTable.user_id, userId))
@@ -16,70 +16,63 @@ export async function getDashboard(userId: number): Promise<DashboardData> {
     }
 
     const user = users[0];
-    
-    // 2. Fetch tasks created by the user (both open and completed)
-    const createdTasks = await db.select()
+    const publicUser = {
+      user_id: user.user_id,
+      username: user.username,
+      coin: parseFloat(user.coin), // Convert string back to number
+      created_at: user.created_at
+    };
+
+    // Get tasks created by the user
+    const createdTasksResult = await db.select()
       .from(tasksTable)
       .where(eq(tasksTable.creator_user_id, userId))
       .execute();
 
-    // 3. Fetch available open tasks created by other users
-    const availableTasksResult = await db.select({
-      task_id: tasksTable.task_id,
-      creator_user_id: tasksTable.creator_user_id,
-      creator_username: usersTable.username,
-      link: tasksTable.link,
-      coin_reward: tasksTable.coin_reward,
-      status: tasksTable.status,
-      created_at: tasksTable.created_at
-    })
+    const createdTasks = createdTasksResult.map(task => ({
+      task_id: task.task_id,
+      creator_user_id: task.creator_user_id,
+      link: task.link,
+      coin_reward: parseFloat(task.coin_reward), // Convert string back to number
+      status: task.status,
+      created_at: task.created_at
+    }));
+
+    // Get available tasks (open tasks not created by this user) with creator info
+    const availableTasksResult = await db.select()
       .from(tasksTable)
       .innerJoin(usersTable, eq(tasksTable.creator_user_id, usersTable.user_id))
-      .where(
-        eq(tasksTable.status, 'open')
-      )
+      .where(eq(tasksTable.status, 'open'))
       .execute();
 
-    // Filter out tasks created by the current user
     const availableTasks = availableTasksResult
-      .filter(task => task.creator_user_id !== userId)
-      .map(task => ({
-        task_id: task.task_id,
-        creator_user_id: task.creator_user_id,
-        creator_username: task.creator_username,
-        link: task.link,
-        coin_reward: parseFloat(task.coin_reward), // Convert numeric to number
-        status: task.status,
-        created_at: task.created_at
+      .filter(result => result.tasks.creator_user_id !== userId)
+      .map(result => ({
+        task_id: result.tasks.task_id,
+        creator_user_id: result.tasks.creator_user_id,
+        creator_username: result.users.username,
+        link: result.tasks.link,
+        coin_reward: parseFloat(result.tasks.coin_reward), // Convert string back to number
+        status: result.tasks.status,
+        created_at: result.tasks.created_at
       }));
 
-    // 4. Count the number of tasks completed by the user
-    const completedTasksCountResult = await db.select({
-      count: count(taskLogTable.log_id)
-    })
+    // Get count of tasks completed by this user
+    const completedTasksCountResult = await db.select({ count: count() })
       .from(taskLogTable)
       .where(eq(taskLogTable.executor_user_id, userId))
       .execute();
 
     const completedTasksCount = completedTasksCountResult[0]?.count || 0;
 
-    // Convert numeric fields to numbers and return dashboard data
     return {
-      user: {
-        user_id: user.user_id,
-        username: user.username,
-        coin: parseFloat(user.coin), // Convert numeric to number
-        created_at: user.created_at
-      },
-      created_tasks: createdTasks.map(task => ({
-        ...task,
-        coin_reward: parseFloat(task.coin_reward) // Convert numeric to number
-      })),
+      user: publicUser,
+      created_tasks: createdTasks,
       available_tasks: availableTasks,
       completed_tasks_count: completedTasksCount
     };
   } catch (error) {
-    console.error('Dashboard fetch failed:', error);
+    console.error('Failed to get dashboard data:', error);
     throw error;
   }
-}
+};

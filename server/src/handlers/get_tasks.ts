@@ -1,34 +1,29 @@
 import { db } from '../db';
 import { tasksTable, usersTable } from '../db/schema';
+import { eq, and } from 'drizzle-orm';
 import { type TaskWithCreator } from '../schema';
-import { eq, desc } from 'drizzle-orm';
 
-export async function getTasks(): Promise<TaskWithCreator[]> {
+export const getTasks = async (): Promise<TaskWithCreator[]> => {
   try {
-    // Join tasks with users to get creator information
-    // Only fetch tasks with 'open' status
-    const results = await db.select({
-      task_id: tasksTable.task_id,
-      creator_user_id: tasksTable.creator_user_id,
-      creator_username: usersTable.username,
-      link: tasksTable.link,
-      coin_reward: tasksTable.coin_reward,
-      status: tasksTable.status,
-      created_at: tasksTable.created_at
-    })
-    .from(tasksTable)
-    .innerJoin(usersTable, eq(tasksTable.creator_user_id, usersTable.user_id))
-    .where(eq(tasksTable.status, 'open'))
-    .orderBy(desc(tasksTable.created_at))
-    .execute();
+    // Get all open tasks with creator information
+    const results = await db.select()
+      .from(tasksTable)
+      .innerJoin(usersTable, eq(tasksTable.creator_user_id, usersTable.user_id))
+      .where(eq(tasksTable.status, 'open'))
+      .execute();
 
-    // Convert numeric coin_reward field to number
+    // Transform the joined results
     return results.map(result => ({
-      ...result,
-      coin_reward: parseFloat(result.coin_reward) // Convert string to number
+      task_id: result.tasks.task_id,
+      creator_user_id: result.tasks.creator_user_id,
+      creator_username: result.users.username,
+      link: result.tasks.link,
+      coin_reward: parseFloat(result.tasks.coin_reward), // Convert string back to number
+      status: result.tasks.status,
+      created_at: result.tasks.created_at
     }));
   } catch (error) {
-    console.error('Failed to fetch tasks:', error);
+    console.error('Failed to get tasks:', error);
     throw error;
   }
-}
+};

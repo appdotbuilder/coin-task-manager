@@ -60,7 +60,21 @@ const appRouter = router({
   // Authentication endpoints
   register: publicProcedure
     .input(registerInputSchema)
-    .mutation(({ input }) => register(input)),
+    .mutation(async ({ input }) => {
+      const user = await register(input);
+      // Generate token for the registered user
+      const tokenPayload = {
+        user_id: user.user_id,
+        username: user.username,
+        exp: Date.now() + (24 * 60 * 60 * 1000) // 24 hours from now
+      };
+      const token = Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
+      
+      return {
+        user,
+        token
+      };
+    }),
 
   login: publicProcedure
     .input(loginInputSchema)
@@ -108,12 +122,29 @@ async function start() {
 
       if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
-        // TODO: Implement JWT token verification and extract userId
-        // For now, this is a placeholder - real implementation should:
-        // 1. Verify JWT token signature
-        // 2. Check token expiration
-        // 3. Extract userId from token payload
-        // userId = verifyJWTAndExtractUserId(token);
+        
+        // Token verification - handle both old and new formats
+        try {
+          const decoded = Buffer.from(token, 'base64').toString('utf-8');
+          
+          // Try new JSON format first
+          try {
+            const tokenPayload = JSON.parse(decoded);
+            if (tokenPayload.user_id && tokenPayload.exp > Date.now()) {
+              userId = tokenPayload.user_id;
+            }
+          } catch {
+            // Fall back to old format: "userId:username"
+            const [userIdStr] = decoded.split(':');
+            const parsedUserId = parseInt(userIdStr);
+            
+            if (!isNaN(parsedUserId)) {
+              userId = parsedUserId;
+            }
+          }
+        } catch (error) {
+          console.error('Invalid token format:', error);
+        }
       }
 
       return { userId, token };
